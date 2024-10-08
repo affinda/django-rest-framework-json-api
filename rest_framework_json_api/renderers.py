@@ -38,6 +38,8 @@ from rest_framework_json_api.utils import (
     is_relationship_field,
 )
 
+RECURSIVE_INCLUDED_FIELDS = ["children"]
+
 
 class JSONRenderer(renderers.JSONRenderer):
     """
@@ -291,7 +293,8 @@ class JSONRenderer(renderers.JSONRenderer):
                 continue
 
             try:
-                included_resources.remove(field_name)
+                if field_name not in RECURSIVE_INCLUDED_FIELDS:
+                    included_resources.remove(field_name)
             except ValueError:
                 # Skip fields not in requested included resources
                 # If no child field, directly continue with the next field
@@ -334,7 +337,7 @@ class JSONRenderer(renderers.JSONRenderer):
             new_included_resources = [
                 key.replace(f"{field_name}.", "", 1)
                 for key in included_resources
-                if field_name == key.split(".")[0]
+                if field_name == key.split(".")[0] and field_name not in RECURSIVE_INCLUDED_FIELDS
             ]
 
             if isinstance(field, ListSerializer):
