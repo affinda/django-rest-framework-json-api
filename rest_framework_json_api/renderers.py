@@ -94,7 +94,13 @@ class JSONRenderer(renderers.JSONRenderer):
         from rest_framework_json_api.relations import ResourceRelatedField
 
         data = {}
+        included_resources = []
 
+        # Get included resources from request if available
+        request = fields.serializer.context.get('request')
+        if request:
+            included_resources = get_included_resources(request, fields.serializer)
+        
         # Don't try to extract relationships from a non-existent resource
         if resource_instance is None:
             return
@@ -110,6 +116,10 @@ class JSONRenderer(renderers.JSONRenderer):
 
             # Skip fields without relations
             if not is_relationship_field(field):
+                continue
+
+            # For ManyRelatedFields, only include if explicitly requested
+            if isinstance(field, relations.ManyRelatedField) and format_field_name(field_name) not in included_resources:
                 continue
 
             source = field.source
