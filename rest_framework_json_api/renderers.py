@@ -86,7 +86,7 @@ class JSONRenderer(renderers.JSONRenderer):
         }
 
     @classmethod
-    def extract_relationships(cls, fields, resource, resource_instance):
+    def extract_relationships(cls, fields, resource, resource_instance, included_resources):
         """
         Builds the relationships top level object based on related serializers.
         """
@@ -94,16 +94,12 @@ class JSONRenderer(renderers.JSONRenderer):
         from rest_framework_json_api.relations import ResourceRelatedField
 
         data = {}
-        included_resources = []
-
-        # Get included resources from request if available
-        request = fields.serializer.context.get('request')
-        if request:
-            included_resources = get_included_resources(request, fields.serializer)
         
         # Don't try to extract relationships from a non-existent resource
         if resource_instance is None:
             return
+        
+        included_fields = [r.split(".")[0] for r in included_resources]
 
         for field_name, field in iter(fields.items()):
             # Skip URL field
@@ -119,7 +115,7 @@ class JSONRenderer(renderers.JSONRenderer):
                 continue
 
             # For ManyRelatedFields, only include if explicitly requested
-            if isinstance(field, relations.ManyRelatedField) and format_field_name(field_name) not in included_resources:
+            if isinstance(field, relations.ManyRelatedField) and field_name not in included_fields:
                 continue
 
             source = field.source
@@ -374,6 +370,7 @@ class JSONRenderer(renderers.JSONRenderer):
                             nested_resource_instance,
                             resource_type,
                             serializer,
+                            new_included_resources,
                             getattr(serializer, "_poly_force_type_resolution", False),
                         )
                         included_cache[new_item["type"]][new_item["id"]] = new_item
@@ -398,6 +395,7 @@ class JSONRenderer(renderers.JSONRenderer):
                         relation_instance,
                         relation_type,
                         field,
+                        new_included_resources,
                         getattr(field, "_poly_force_type_resolution", False),
                     )
                     included_cache[new_item["type"]][new_item["id"]] = new_item
@@ -476,6 +474,7 @@ class JSONRenderer(renderers.JSONRenderer):
         resource_instance,
         resource_name,
         serializer,
+        included_resources,
         force_type_resolution=False,
     ):
         """
@@ -495,7 +494,7 @@ class JSONRenderer(renderers.JSONRenderer):
         attributes = cls.extract_attributes(fields, resource)
         if attributes:
             resource_data["attributes"] = attributes
-        relationships = cls.extract_relationships(fields, resource, resource_instance)
+        relationships = cls.extract_relationships(fields, resource, resource_instance, included_resources)
         if relationships:
             resource_data["relationships"] = relationships
         # Add 'self' link if field is present and valid
@@ -607,6 +606,7 @@ class JSONRenderer(renderers.JSONRenderer):
                         resource_instance,
                         resource_name,
                         serializer,
+                        included_resources,
                         force_type_resolution,
                     )
                     json_api_data.append(json_resource_obj)
@@ -631,6 +631,7 @@ class JSONRenderer(renderers.JSONRenderer):
                     resource_instance,
                     resource_name,
                     serializer,
+                    included_resources,
                     force_type_resolution,
                 )
 
