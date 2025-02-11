@@ -99,7 +99,7 @@ class JSONRenderer(renderers.JSONRenderer):
         if resource_instance is None:
             return
         
-        included_fields = [r.split(".")[0] for r in included_resources]
+        included_fields = [inflection.underscore(r.split(".")[0]) for r in included_resources]
 
         for field_name, field in iter(fields.items()):
             # Skip URL field
