@@ -85,12 +85,18 @@ class AutoPrefetchMixin:
             self.request, self.get_serializer_class()
         )
 
+        synonyms = getattr(self, "prefetch_synonyms", {})
+
         for included in included_resources + ["__all__"]:
             # If include was not defined, trying to resolve it automatically
+            for synonym in synonyms:    
+                included = included.replace(synonym, synonyms[synonym])
+
             included_model = None
             levels = included.split(".")
             level_model = qs.model
             for level in levels:
+
                 if not hasattr(level_model, level):
                     break
                 field = getattr(level_model, level)
