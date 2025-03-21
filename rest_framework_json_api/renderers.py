@@ -312,6 +312,13 @@ class JSONRenderer(renderers.JSONRenderer):
 
             serializer_data = resource.get(field_name)
 
+            new_included_resources = [
+                            key.replace(f"{field_name}.", "", 1)
+                            for key in included_resources
+                            if field_name == key.split(".")[0]
+                        ]
+            context["included_resources"] = new_included_resources
+
             if isinstance(field, relations.ManyRelatedField):
                 serializer_class = included_serializers[field_name]
                 field = serializer_class(relation_instance, many=True, context=context)
@@ -337,12 +344,7 @@ class JSONRenderer(renderers.JSONRenderer):
                 field = serializer_class(relation_instance, many=many, context=context)
                 serializer_data = field.data
 
-            new_included_resources = [
-                key.replace(f"{field_name}.", "", 1)
-                for key in included_resources
-                if field_name == key.split(".")[0]
-            ]
-
+            
             if isinstance(field, ListSerializer):
                 serializer = field.child
                 relation_type = get_resource_type_from_serializer(serializer)
