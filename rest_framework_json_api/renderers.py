@@ -372,7 +372,11 @@ class JSONRenderer(renderers.JSONRenderer):
                             new_included_resources,
                             getattr(serializer, "_poly_force_type_resolution", False),
                         )
-                        included_cache[new_item["type"]][new_item["id"]] = new_item
+
+                        if existing_item := included_cache[new_item["type"]].get(new_item["id"]):
+                            existing_item["relationships"] = {**existing_item["relationships"], **new_item["relationships"]}
+                        else:
+                            included_cache[new_item["type"]][new_item["id"]] = new_item
 
                         cls.extract_included(
                             serializer_fields,
