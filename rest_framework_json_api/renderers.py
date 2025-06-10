@@ -374,7 +374,7 @@ class JSONRenderer(renderers.JSONRenderer):
                         )
 
                         if existing_item := included_cache[new_item["type"]].get(new_item["id"]):
-                            existing_item["relationships"] = {**existing_item["relationships"], **new_item["relationships"]}
+                            existing_item["relationships"] = {**existing_item.get("relationships", {}), **new_item.get("relationships", {})}
                         else:
                             included_cache[new_item["type"]][new_item["id"]] = new_item
 
