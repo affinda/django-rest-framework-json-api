@@ -17,6 +17,66 @@ from rest_framework.settings import api_settings
 
 from .settings import json_api_settings
 
+
+class PrefetchSynonymRegistry:
+    """
+    Global registry for prefetch synonyms across all ViewSets.
+    
+    This registry solves the problem of nested includes where the framework
+    needs to apply synonyms from different ViewSets at different levels of
+    the include hierarchy.
+    """
+    _registry = {}
+
+    @classmethod
+    def register(cls, resource_type, synonyms):
+        """
+        Register prefetch synonyms for a specific resource type.
+        
+        Args:
+            resource_type (str): The resource type (e.g., 'documents', 'document-types')
+            synonyms (dict): Dictionary mapping field names to their prefetch equivalents
+        """
+        if synonyms:
+            cls._registry[resource_type] = synonyms
+
+    @classmethod
+    def get_synonym(cls, resource_type, field_name):
+        """
+        Get the prefetch synonym for a field name in a specific resource type.
+        
+        Args:
+            resource_type (str): The resource type to look up
+            field_name (str): The field name to translate
+            
+        Returns:
+            str: The prefetch synonym if found, otherwise the original field_name
+        """
+        return cls._registry.get(resource_type, {}).get(field_name, field_name)
+
+    @classmethod
+    def get_synonyms(cls, resource_type):
+        """
+        Get all synonyms for a specific resource type.
+        
+        Args:
+            resource_type (str): The resource type to look up
+            
+        Returns:
+            dict: Dictionary of synonyms for the resource type
+        """
+        return cls._registry.get(resource_type, {})
+
+    @classmethod
+    def clear(cls):
+        """Clear all registered synonyms. Useful for testing."""
+        cls._registry.clear()
+
+    @classmethod
+    def get_all(cls):
+        """Get all registered synonyms. Useful for debugging."""
+        return cls._registry.copy()
+
 # Generic relation descriptor from django.contrib.contenttypes.
 if "django.contrib.contenttypes" not in settings.INSTALLED_APPS:  # pragma: no cover
     # Target application does not use contenttypes. Importing would cause errors.

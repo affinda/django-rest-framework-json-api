@@ -25,6 +25,9 @@ from rest_framework_json_api.utils import (
     Hyperlink,
     get_included_resources,
     get_resource_type_from_instance,
+    get_resource_type_from_model,
+    get_resource_type_from_serializer,
+    PrefetchSynonymRegistry,
     undo_format_link_segment,
 )
 
@@ -77,6 +80,22 @@ class PreloadIncludesMixin:
 
 
 class AutoPrefetchMixin:
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._register_prefetch_synonyms()
+
+    def _register_prefetch_synonyms(self):
+        """Register this ViewSet's prefetch synonyms with the global registry."""
+        synonyms = getattr(self, "prefetch_synonyms", {})
+        if synonyms:
+            try:
+                serializer_class = self.get_serializer_class()
+                resource_type = get_resource_type_from_serializer(serializer_class)
+                PrefetchSynonymRegistry.register(resource_type, synonyms)
+            except (AttributeError, Exception):
+                # If we can't determine the resource type, skip registration
+                pass
+
     def get_queryset(self, *args, **kwargs):
         """This mixin adds automatic prefetching for OneToOne and ManyToMany fields."""
         qs = super().get_queryset(*args, **kwargs)
@@ -85,12 +104,9 @@ class AutoPrefetchMixin:
             self.request, self.get_serializer_class()
         )
 
-        synonyms = getattr(self, "prefetch_synonyms", {})
-
         for included in included_resources + ["__all__"]:
-            # If include was not defined, trying to resolve it automatically
-            for synonym in synonyms:    
-                included = included.replace(synonym, synonyms[synonym])
+            # Apply synonyms using the global registry for nested includes
+            included = self._apply_synonyms_to_include(included, qs.model)
 
             included_model = None
             levels = included.split(".")
@@ -128,6 +144,66 @@ class AutoPrefetchMixin:
                 qs = qs.prefetch_related(included.replace(".", "__"))
 
         return qs
+
+    def _apply_synonyms_to_include(self, include_path, base_model):
+        """
+        Apply synonyms to each level of the include path using the global registry.
+        
+        Args:
+            include_path (str): The include path (e.g., "document_type.validation_rules")
+            base_model: The base model to start traversing from
+            
+        Returns:
+            str: The include path with synonyms applied
+        """
+        if not include_path or include_path == "__all__":
+            return include_path
+            
+        levels = include_path.split(".")
+        translated_levels = []
+        current_model = base_model
+        
+        for level in levels:
+            # Get the resource type for the current model
+            try:
+                resource_type = get_resource_type_from_model(current_model)
+                # Apply synonym translation for this level
+                translated_level = PrefetchSynonymRegistry.get_synonym(resource_type, level)
+                translated_levels.append(translated_level)
+                
+                # Move to the next model in the chain
+                if hasattr(current_model, translated_level):
+                    field = getattr(current_model, translated_level)
+                    field_class = field.__class__
+                    
+                    is_forward_relation = issubclass(
+                        field_class, (ForwardManyToOneDescriptor, ManyToManyDescriptor)
+                    )
+                    is_reverse_relation = issubclass(
+                        field_class, (ReverseManyToOneDescriptor, ReverseOneToOneDescriptor)
+                    )
+                    
+                    if is_forward_relation or is_reverse_relation:
+                        if issubclass(field_class, ReverseOneToOneDescriptor):
+                            model_field = field.related.field
+                        else:
+                            model_field = field.field
+                        
+                        if is_forward_relation:
+                            current_model = model_field.related_model
+                        else:
+                            current_model = model_field.model
+                    else:
+                        break
+                else:
+                    break
+            except Exception:
+                # If we can't determine the resource type or navigate the relationship,
+                # just use the original level
+                translated_levels.append(level)
+                break
+        
+        return ".".join(translated_levels)
 
 
 class RelatedMixin:
