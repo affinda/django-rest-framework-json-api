@@ -80,21 +80,11 @@ class PreloadIncludesMixin:
 
 
 class AutoPrefetchMixin:
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._register_prefetch_synonyms()
-
-    def _register_prefetch_synonyms(self):
-        """Register this ViewSet's prefetch synonyms with the global registry."""
-        synonyms = getattr(self, "prefetch_synonyms", {})
-        if synonyms:
-            try:
-                serializer_class = self.get_serializer_class()
-                resource_type = get_resource_type_from_serializer(serializer_class)
-                PrefetchSynonymRegistry.register(resource_type, synonyms)
-            except (AttributeError, Exception):
-                # If we can't determine the resource type, skip registration
-                pass
+    def __init_subclass__(cls, **kwargs):
+        """Register synonyms when a subclass is created (at import time)."""
+        super().__init_subclass__(**kwargs)
+        # Register synonyms at class definition time
+        cls._register_class_synonyms()
 
     def get_queryset(self, *args, **kwargs):
         """This mixin adds automatic prefetching for OneToOne and ManyToMany fields."""
@@ -204,6 +194,50 @@ class AutoPrefetchMixin:
                 break
         
         return ".".join(translated_levels)
+
+
+    @classmethod
+    def _register_class_synonyms(cls):
+        """Register synonyms for this ViewSet class at import time."""
+        try:
+            # Check if this class has a serializer_class attribute
+            if hasattr(cls, 'serializer_class') and cls.serializer_class:
+                serializer_class = cls.serializer_class
+                resource_type = get_resource_type_from_serializer(serializer_class)
+                
+                # Automatically infer synonyms from serializer fields
+                synonyms = cls._infer_synonyms_from_serializer_class(serializer_class)
+                
+                if synonyms:
+                    PrefetchSynonymRegistry.register(resource_type, synonyms)
+        except (AttributeError, Exception):
+            # If we can't determine the resource type, skip registration
+            pass
+
+    @classmethod
+    def _infer_synonyms_from_serializer_class(cls, serializer_class):
+        """Automatically infer synonyms from serializer field sources (class method version)."""
+        synonyms = {}
+        
+        try:
+            # Instantiate the serializer to access its fields
+            serializer_instance = serializer_class()
+            
+            for field_name, field in serializer_instance.fields.items():
+                # Check if the field has a source attribute that differs from the field name
+                source = getattr(field, 'source', None)
+                if source and source != field_name and source != '*':
+                    # Handle nested sources (e.g., 'user.profile.name')
+                    # For prefetch, we typically only care about the first level
+                    source_parts = source.split('.')
+                    if len(source_parts) > 0:
+                        synonyms[field_name] = source_parts[0]
+                        
+        except Exception:
+            # If we can't instantiate the serializer or access fields, return empty
+            pass
+            
+        return synonyms
 
 
 class RelatedMixin:
