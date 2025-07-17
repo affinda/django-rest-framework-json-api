@@ -125,10 +125,10 @@ class AutoPrefetchMixin:
                     else:
                         model_field = field.field
 
-                    if is_forward_relation:
-                        level_model = model_field.related_model
-                    else:
+                    if is_reverse_relation:
                         level_model = model_field.model
+                    else:
+                        level_model = model_field.related_model
 
             if included_model is not None:
                 qs = qs.prefetch_related(included.replace(".", "__"))
