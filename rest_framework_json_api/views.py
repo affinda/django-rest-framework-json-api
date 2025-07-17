@@ -179,10 +179,10 @@ class AutoPrefetchMixin:
                         else:
                             model_field = field.field
                         
-                        if is_forward_relation:
-                            current_model = model_field.related_model
-                        else:
+                        if is_reverse_relation:
                             current_model = model_field.model
+                        else:
+                            current_model = model_field.related_model
                     else:
                         break
                 else:
