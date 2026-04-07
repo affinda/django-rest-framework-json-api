@@ -33,6 +33,7 @@ from rest_framework_json_api.utils import (
     get_resource_id,
     get_resource_name,
     get_resource_type_from_instance,
+    get_resource_type_from_model,
     get_resource_type_from_serializer,
     get_serializer_fields,
     is_relationship_field,
@@ -272,6 +273,15 @@ class JSONRenderer(renderers.JSONRenderer):
         """
         Adds related data to the top level included key when the request includes
         ?include=example,example_field2
+
+        This method includes optimizations to short-circuit already-cached items.
+        When the same resource appears via multiple include paths (e.g.
+        ``documentType.fields`` AND ``documentType.validationRules.fields``), the
+        naive approach would redundantly create serializer instances, call
+        ``get_serializer_fields``, and ``build_json_resource_obj`` for every item
+        before checking the cache.  The optimizations here check the cache *before*
+        doing that expensive per-item work and skip items that have already been
+        fully processed.
         """
         # this function may be called with an empty record (example: Browsable Interface)
         if not resource_instance:
@@ -313,15 +323,42 @@ class JSONRenderer(renderers.JSONRenderer):
             serializer_data = resource.get(field_name)
 
             new_included_resources = [
-                            key.replace(f"{field_name}.", "", 1)
-                            for key in included_resources
-                            if field_name == key.split(".")[0]
-                        ]
+                key.replace(f"{field_name}.", "", 1)
+                for key in included_resources
+                if field_name == key.split(".")[0]
+            ]
             context["included_resources"] = new_included_resources
 
             if isinstance(field, relations.ManyRelatedField):
                 serializer_class = included_serializers[field_name]
-                field = serializer_class(relation_instance, many=True, context=context)
+
+                # Optimization 1: Bulk pre-check.  Before the expensive .data
+                # serialization, check whether we can skip this field entirely.
+                # When there are no nested includes and every instance is
+                # already in the cache, there is nothing new to add.  The
+                # resource type is derived from serializer class attributes
+                # without creating instances.
+                if not new_included_resources and relation_instance is not None:
+                    _meta = getattr(serializer_class, "Meta", None)
+                    _json_api_meta = getattr(
+                        serializer_class, "JSONAPIMeta", None
+                    )
+                    _rtype = getattr(
+                        _json_api_meta, "resource_name", None
+                    ) or getattr(_meta, "resource_name", None)
+                    if _rtype is None and hasattr(_meta, "model"):
+                        _rtype = get_resource_type_from_model(_meta.model)
+                    if _rtype and _rtype in included_cache:
+                        _type_cache = included_cache[_rtype]
+                        if all(
+                            force_str(inst.pk) in _type_cache
+                            for inst in relation_instance
+                        ):
+                            continue
+
+                field = serializer_class(
+                    relation_instance, many=True, context=context
+                )
                 serializer_data = field.data
 
             if isinstance(field, relations.RelatedField):
@@ -341,14 +378,22 @@ class JSONRenderer(renderers.JSONRenderer):
                         continue
 
                 serializer_class = included_serializers[field_name]
-                field = serializer_class(relation_instance, many=many, context=context)
+                field = serializer_class(
+                    relation_instance, many=many, context=context
+                )
                 serializer_data = field.data
 
-            
             if isinstance(field, ListSerializer):
                 serializer = field.child
                 relation_type = get_resource_type_from_serializer(serializer)
                 relation_queryset = list(relation_instance)
+
+                # Optimization 3: Cache serializer fields per class to avoid
+                # repeated instantiation.  All instances of the same serializer
+                # class share the same field definitions, so we only need to
+                # create one instance to get them.
+                cached_serializer_fields = None
+                has_nested_includes = bool(new_included_resources)
 
                 if serializer_data:
                     for position in range(len(serializer_data)):
@@ -356,13 +401,35 @@ class JSONRenderer(renderers.JSONRenderer):
                         nested_resource_instance = relation_queryset[position]
                         resource_type = (
                             relation_type
-                            or get_resource_type_from_instance(nested_resource_instance)
-                        )
-                        serializer_fields = get_serializer_fields(
-                            serializer.__class__(
-                                nested_resource_instance, context=serializer.context
+                            or get_resource_type_from_instance(
+                                nested_resource_instance
                             )
                         )
+
+                        # Optimization 2: Per-item early cache check.  If this
+                        # item is already in the included_cache AND there are no
+                        # nested includes that could add new relationships, skip
+                        # all expensive work.  When nested includes exist (e.g.
+                        # "children"), we must still process the item so those
+                        # relationships get merged.
+                        item_id = force_str(nested_resource_instance.pk)
+                        already_cached = (
+                            resource_type in included_cache
+                            and item_id in included_cache[resource_type]
+                        )
+                        if already_cached and not has_nested_includes:
+                            continue
+
+                        if cached_serializer_fields is None:
+                            cached_serializer_fields = get_serializer_fields(
+                                serializer.__class__(
+                                    nested_resource_instance,
+                                    context=serializer.context,
+                                )
+                            )
+
+                        serializer_fields = cached_serializer_fields
+
                         new_item = cls.build_json_resource_obj(
                             serializer_fields,
                             serializer_resource,
@@ -370,13 +437,24 @@ class JSONRenderer(renderers.JSONRenderer):
                             resource_type,
                             serializer,
                             new_included_resources,
-                            getattr(serializer, "_poly_force_type_resolution", False),
+                            getattr(
+                                serializer,
+                                "_poly_force_type_resolution",
+                                False,
+                            ),
                         )
 
-                        if existing_item := included_cache[new_item["type"]].get(new_item["id"]):
-                            existing_item["relationships"] = {**existing_item.get("relationships", {}), **new_item.get("relationships", {})}
+                        if existing_item := included_cache[
+                            new_item["type"]
+                        ].get(new_item["id"]):
+                            existing_item["relationships"] = {
+                                **existing_item.get("relationships", {}),
+                                **new_item.get("relationships", {}),
+                            }
                         else:
-                            included_cache[new_item["type"]][new_item["id"]] = new_item
+                            included_cache[new_item["type"]][
+                                new_item["id"]
+                            ] = new_item
 
                         cls.extract_included(
                             serializer_fields,
